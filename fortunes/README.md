@@ -1,0 +1,1 @@
+Stolen from ubuntu/debian fortune-mod package.
