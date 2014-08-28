@@ -1,39 +1,41 @@
 package main
 
 import (
-	"fmt"
 	"flag"
+	"fmt"
+	"github.com/noise/fortune-redis-go/rfortune"
 	"log"
 	"os"
-	"github.com/noise/fortune-redis-go/rfortune"
 )
 
 var (
-	logger = log.New(os.Stdout, "fortune: ", 0)
-	redisServer = flag.String("redisServer", ":6379", "host and port for Redis server")
+	logger        = log.New(os.Stdout, "fortune: ", 0)
+	redisServer   = flag.String("redisServer", ":6379", "host and port for Redis server")
 	redisPassword = flag.String("redisPassword", "", "redis password")
 )
 
 func main() {
-	dir := flag.String("dir", "", "Directory from which to load fortune mods.")
-	serve := flag.Bool("serve", false, "Start the HTTP API server.")
 	help := flag.Bool("h", false, "Print usage info.")
+	load := flag.String("load", "", "Load fortune modules from this directory.")
+	serve := flag.Bool("serve", false, "Start the HTTP API server.")
+	// flags for cmdline fortunes
+	verbose := flag.Bool("v", false, "verbose output including fortuneId and module name")
 	flag.Parse()
 
 	rfortune.InitRedis(*redisServer, *redisPassword)
 
-	if *dir != "" {
-		rfortune.LoadFortuneMods(*dir)
+	if *load != "" {
+		rfortune.LoadFortuneMods(*load)
 	} else if *serve {
 		rfortune.Start()
 	} else if *help {
 		flag.Usage()
 	} else {
-		f, err := rfortune.RandomFortune("")
+		mod := flag.Arg(0)
+		f, err := rfortune.RandomFortune(mod)
 		if err != nil {
-			logger.Fatal(err)
+			logger.Fatalln("|error|", err)
 		}
-		fmt.Println(f.AsText())
+		fmt.Println(f.AsText(*verbose))
 	}
 }
-

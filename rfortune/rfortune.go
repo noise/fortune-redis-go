@@ -3,11 +3,13 @@ package rfortune
 import (
 	"bufio"
 	"container/list"
+	"errors"
 	"fmt"
 	"github.com/garyburd/redigo/redis"
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -35,8 +37,12 @@ func (f *Fortune) Path() string {
 func (f *Fortune) AsHtml() string {
 	return fmt.Sprintf("<div id=\"%s\"><pre>%s</pre></div>", f.Path(), f.text)
 }
-func (f *Fortune) AsText() string {
-	return fmt.Sprintf("%s:%d\n%s", f.mod, f.id, f.text)
+func (f *Fortune) AsText(verbose bool) string {
+	if verbose {
+		return fmt.Sprintf("%s:%d\n%s", f.mod, f.id, f.text)
+	} else {
+		return f.text
+	}
 }
 
 // -----------------------------
@@ -72,6 +78,17 @@ func RandomFortune(mod string) (*Fortune, error) {
 	conn := Pool.Get()
 	defer conn.Close()
 
+	// ensure the specified module exists
+	if mod != "" {
+		member, err := redis.Bool(conn.Do("SISMEMBER", MODS_KEY, mod))
+		if err != nil {
+			return nil, err
+		}
+		if member == false {
+			return nil, errors.New(fmt.Sprintf("module '%s' not found", mod))
+		}
+	}
+
 	if mod == "" {
 		mod2, err := redis.String(conn.Do("SRANDMEMBER", MODS_KEY))
 		if err != nil {
@@ -79,6 +96,7 @@ func RandomFortune(mod string) (*Fortune, error) {
 		}
 		mod = mod2
 	}
+
 	fid, err := redis.Int(conn.Do("SRANDMEMBER", modKey(mod)))
 	if err != nil {
 		return nil, err
@@ -98,8 +116,10 @@ func LoadFortuneMods(dir string) {
 
 	for _, f := range files {
 		var fortunes = loadFortuneMod(f)
-		logger.Printf("Loaded %d fortunes from %s", fortunes.Len(), f)
-		addToRedis(f, fortunes)
+		mod := strings.Split(f, "/")[1]
+		logger.Printf("Loaded %d fortunes from %s", fortunes.Len(), mod)
+
+		addToRedis(mod, fortunes)
 	}
 }
 
@@ -137,13 +157,17 @@ func loadFortuneMod(path string) list.List {
 	for scanner.Scan() {
 		l := scanner.Text()
 		if l == "%" {
-			fortunes.PushBack(Fortune{mod: path, text: s})
+			fortunes.PushBack(Fortune{mod: strings.Split(path, "/")[1], text: s})
 			s = ""
 		} else {
 			s += l
 		}
 	}
 	return fortunes
+}
+
+func ClearFortuneData() {
+
 }
 
 func modKey(mod string) string {
@@ -155,6 +179,6 @@ func fortuneKey(fid int) string {
 
 func checkErr(err error, mesg string) {
 	if err != nil {
-		logger.Fatal(mesg, err)
+		logger.Fatalln("%s, %v", mesg, err)
 	}
 }
