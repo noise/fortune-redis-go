@@ -1,26 +1,30 @@
 package rfortune
 
 import (
+	"bufio"
+	"container/list"
 	"fmt"
+	"github.com/garyburd/redigo/redis"
 	"log"
 	"os"
-	"container/list"
-	"bufio"
 	"path/filepath"
 	"time"
-	"github.com/garyburd/redigo/redis"
 )
 
 var logger = log.New(os.Stdout, "fortune: ", 0)
 
-const PATH_FMT = "fortunes/%s/%s"
-const FID_KEY = "fid"
-const MODS_KEY = "fmods"
+const (
+	PATH_FMT = "fortunes/%s/%s"
+	FID_KEY  = "fid"
+	MODS_KEY = "fmods"
+)
+
+var Pool *redis.Pool
 
 // -----------------------------
 type Fortune struct {
-	id int
-	mod string
+	id   int
+	mod  string
 	text string
 }
 
@@ -34,18 +38,16 @@ func (f *Fortune) AsHtml() string {
 func (f *Fortune) AsText() string {
 	return fmt.Sprintf("%s:%d\n%s", f.mod, f.id, f.text)
 }
+
 // -----------------------------
 
-
-var Pool *redis.Pool
-
-
+// Create a connection pool to the Redis server
 func InitRedis(server, password string) {
 	Pool = &redis.Pool{
-		MaxIdle: 3,
-		MaxActive: 20,
+		MaxIdle:     3,
+		MaxActive:   20,
 		IdleTimeout: 240 * time.Second,
-		Dial: func () (redis.Conn, error) {
+		Dial: func() (redis.Conn, error) {
 			c, err := redis.Dial("tcp", server)
 			if err != nil {
 				return nil, err
@@ -65,12 +67,40 @@ func InitRedis(server, password string) {
 	}
 }
 
+// Return a single random Fortune, from a random module
+func RandomFortune(mod string) (*Fortune, error) {
+	conn := Pool.Get()
+	defer conn.Close()
 
-func modKey(mod string) string {
-	return "fmod/" + mod
+	if mod == "" {
+		mod2, err := redis.String(conn.Do("SRANDMEMBER", MODS_KEY))
+		if err != nil {
+			return nil, err
+		}
+		mod = mod2
+	}
+	fid, err := redis.Int(conn.Do("SRANDMEMBER", modKey(mod)))
+	if err != nil {
+		return nil, err
+	}
+
+	text, err := redis.String(conn.Do("GET", fortuneKey(fid)))
+	if err != nil {
+		return nil, err
+	}
+
+	return &Fortune{mod: mod, id: fid, text: text}, nil
 }
-func fortuneKey(fid int) string {
-	return fmt.Sprintf("f/%d", fid)
+
+// Load fortune module files, parse, and store in Redis sets
+func LoadFortuneMods(dir string) {
+	files, _ := filepath.Glob(dir + "/*")
+
+	for _, f := range files {
+		var fortunes = loadFortuneMod(f)
+		logger.Printf("Loaded %d fortunes from %s", fortunes.Len(), f)
+		addToRedis(f, fortunes)
+	}
 }
 
 func addToRedis(mod string, fortunes list.List) {
@@ -79,23 +109,17 @@ func addToRedis(mod string, fortunes list.List) {
 
 	if fortunes.Len() > 0 {
 		_, err := conn.Do("SADD", MODS_KEY, mod)
-		if err != nil {
-			logger.Fatal("Error inserting mod", err)
-		}
+		checkErr(err, "Error inserting mod")
 	}
 	for e := fortunes.Front(); e != nil; e = e.Next() {
 		// TODO: this screws up the other sends: conn.Send("WATCH", FID_KEY)
 		fid, err := redis.Int(conn.Do("INCR", FID_KEY))
-		if err != nil {
-			logger.Fatal("Error inserting to redis", err)
-		}			
+		checkErr(err, "Error inserting to redis")
 		conn.Send("MULTI")
 		conn.Send("SET", fortuneKey(fid), e.Value.(Fortune).text)
 		conn.Send("SADD", modKey(e.Value.(Fortune).mod), fid)
 		_, err = conn.Do("EXEC")
-		if err != nil {
-			logger.Fatal("Error inserting to redis", err)
-		}
+		checkErr(err, "Error inserting to redis")
 	}
 }
 
@@ -105,9 +129,7 @@ func loadFortuneMod(path string) list.List {
 	var fortunes list.List
 
 	file, err := os.Open(path)
-	if err != nil {
-		log.Fatal(err)
-	}
+	checkErr(err, "Can't open file "+path)
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
@@ -124,37 +146,15 @@ func loadFortuneMod(path string) list.List {
 	return fortunes
 }
 
-func LoadFortuneMods(dir string) {
-	files, _ := filepath.Glob(dir + "/*")
-	
-	for _, f := range files {
-		var fortunes = loadFortuneMod(f)
-		logger.Printf("Loaded %d fortunes from %s", fortunes.Len(), f)
-		addToRedis(f, fortunes)
-	}
-}	
+func modKey(mod string) string {
+	return "fmod/" + mod
+}
+func fortuneKey(fid int) string {
+	return fmt.Sprintf("f/%d", fid)
+}
 
-func RandomFortune(mod string) Fortune {
-	conn := Pool.Get()
-	defer conn.Close()
-
-	if mod == "" {
-		mod2, err := redis.String(conn.Do("SRANDMEMBER", MODS_KEY))
-		if (err != nil) {
-			logger.Fatal("error fetching mod: ", err)
-		} else {
-			mod = mod2
-		}
+func checkErr(err error, mesg string) {
+	if err != nil {
+		logger.Fatal(mesg, err)
 	}
-	fid, err := redis.Int(conn.Do("SRANDMEMBER", modKey(mod)))
-	if (err != nil) {
-		logger.Fatal("error fetching fortune id, mod: " + mod, err)
-	}
-
-	text, err := redis.String(conn.Do("GET", fortuneKey(fid)))
-	if (err != nil) {
-		logger.Fatal("error fetching fortune text: ", err)
-	}
-
-	return Fortune{mod: mod, id: fid, text: text}
 }

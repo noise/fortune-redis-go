@@ -7,18 +7,22 @@ import (
 
 var addr = "0.0.0.0:8080"
 
+var foo, _ = fmt.Printf("")
+
 func Start() {
 	logger.Printf("Starting http Server on http://%s", addr)
 
 	http.Handle("/", http.HandlerFunc(randomFortune))
 
 	err := http.ListenAndServe(addr, nil)
-	if err != nil {
-		fmt.Printf("ListenAndServe Error :", err)
-	}
+	checkErr(err, "ListenAndServe Error :")
 }
 
 func randomFortune(w http.ResponseWriter, req *http.Request) {
-	f := RandomFortune("")
-	w.Write([]byte(f.AsHtml()))
+	f, err := RandomFortune("")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	} else {
+		w.Write([]byte(f.AsHtml()))
+	}
 }

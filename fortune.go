@@ -8,9 +8,8 @@ import (
 	"github.com/noise/fortune-redis-go/rfortune"
 )
 
-var logger = log.New(os.Stdout, "fortune: ", 0)
-
 var (
+	logger = log.New(os.Stdout, "fortune: ", 0)
 	redisServer = flag.String("redisServer", ":6379", "host and port for Redis server")
 	redisPassword = flag.String("redisPassword", "", "redis password")
 )
@@ -30,7 +29,10 @@ func main() {
 	} else if *help {
 		flag.Usage()
 	} else {
-		f := rfortune.RandomFortune("")
+		f, err := rfortune.RandomFortune("")
+		if err != nil {
+			logger.Fatal(err)
+		}
 		fmt.Println(f.AsText())
 	}
 }
