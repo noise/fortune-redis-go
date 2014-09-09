@@ -2,7 +2,6 @@ package rfortune
 
 import (
 	"bufio"
-	"container/list"
 	"errors"
 	"fmt"
 	"github.com/garyburd/redigo/redis"
@@ -117,27 +116,27 @@ func LoadFortuneMods(dir string) {
 	for _, f := range files {
 		var fortunes = loadFortuneMod(f)
 		mod := strings.Split(f, "/")[1]
-		logger.Printf("Loaded %d fortunes from %s", fortunes.Len(), mod)
+		logger.Printf("Loaded %d fortunes from %s", len(fortunes), mod)
 
 		addToRedis(mod, fortunes)
 	}
 }
 
-func addToRedis(mod string, fortunes list.List) {
+func addToRedis(mod string, fortunes []Fortune) {
 	conn := Pool.Get()
 	defer conn.Close()
 
-	if fortunes.Len() > 0 {
+	if len(fortunes) > 0 {
 		_, err := conn.Do("SADD", MODS_KEY, mod)
 		checkErr(err, "Error inserting mod")
 	}
-	for e := fortunes.Front(); e != nil; e = e.Next() {
+	for _, f := range fortunes {
 		// TODO: this screws up the other sends: conn.Send("WATCH", FID_KEY)
 		fid, err := redis.Int(conn.Do("INCR", FID_KEY))
 		checkErr(err, "Error inserting to redis")
 		conn.Send("MULTI")
-		conn.Send("SET", fortuneKey(fid), e.Value.(Fortune).text)
-		conn.Send("SADD", modKey(e.Value.(Fortune).mod), fid)
+		conn.Send("SET", fortuneKey(fid), f.text)
+		conn.Send("SADD", modKey(f.mod), fid)
 		_, err = conn.Do("EXEC")
 		checkErr(err, "Error inserting to redis")
 	}
@@ -145,8 +144,8 @@ func addToRedis(mod string, fortunes list.List) {
 
 // Parse the given fortune file and return a list of fortune strings
 // Fortune files are delimited by a '%' character on its own line.
-func loadFortuneMod(path string) list.List {
-	var fortunes list.List
+func loadFortuneMod(path string) []Fortune {
+	var fortunes = make([]Fortune, 0)
 
 	file, err := os.Open(path)
 	checkErr(err, "Can't open file "+path)
@@ -157,7 +156,7 @@ func loadFortuneMod(path string) list.List {
 	for scanner.Scan() {
 		l := scanner.Text()
 		if l == "%" {
-			fortunes.PushBack(Fortune{mod: strings.Split(path, "/")[1], text: s})
+			fortunes = append(fortunes, Fortune{mod: strings.Split(path, "/")[1], text: s})
 			s = ""
 		} else {
 			s += l
